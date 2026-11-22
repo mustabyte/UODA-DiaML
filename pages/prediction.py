@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from database.repository import save_prediction
 from components.validation import (
     FEATURE_COLUMNS,
     FEATURE_RULES,
@@ -310,6 +311,17 @@ def display_prediction_result(result):
             "individual's diabetes risk."
         )
 
+        # Display the save confirmation inside the result box.
+        saved_prediction_id = st.session_state["diaml_prediction_id"]
+        save_error = st.session_state["diaml_prediction_save_error"]
+
+        if saved_prediction_id is not None:
+            st.success(
+                f"Prediction saved to history — ID #{saved_prediction_id}"
+            )
+        elif save_error:
+            st.warning(save_error)
+
     # Keep the detailed explanation hidden until requested.
     with st.expander("Understanding Your Result", expanded=False):
         st.markdown("**What does the classification mean?**")
@@ -373,6 +385,13 @@ if "diaml_prediction_inputs" not in st.session_state:
 if "diaml_prediction_warnings" not in st.session_state:
     st.session_state["diaml_prediction_warnings"] = {}
 
+# Track the saved database record for the latest prediction.
+if "diaml_prediction_id" not in st.session_state:
+    st.session_state["diaml_prediction_id"] = None
+
+if "diaml_prediction_save_error" not in st.session_state:
+    st.session_state["diaml_prediction_save_error"] = None
+
 
 # Build the health measurement form.
 with st.container(border=True):
@@ -406,6 +425,9 @@ with st.container(border=True):
 
 # Validate submitted measurements and generate a prediction.
 if submitted:
+    # A new submission replaces the previous record status.
+    st.session_state["diaml_prediction_id"] = None
+    st.session_state["diaml_prediction_save_error"] = None
     validation_result = validate_prediction_input(input_data)
 
     if not validation_result.is_valid:
@@ -436,6 +458,29 @@ if submitted:
             st.session_state["diaml_prediction_inputs"] = (
                 validation_result.cleaned_data
             )
+
+            # Save only after a new, successful prediction submission.
+            try:
+                prediction_id = save_prediction(
+                    measurements=validation_result.cleaned_data,
+                    probability=prediction_result["probability"],
+                    classification=(
+                        "Positive"
+                        if prediction_result["prediction"] == 1
+                        else "Negative"
+                    ),
+                    threshold=prediction_result["threshold"],
+                    model_name=model_config.get("model_name", "Random Forest"),
+                    model_version=model_config.get("model_version", "v1.0"),
+                )
+                st.session_state["diaml_prediction_id"] = prediction_id
+            except Exception:
+                # Keep the model result visible if database saving fails.
+                st.session_state["diaml_prediction_save_error"] = (
+                    "The prediction was generated, but it could not be "
+                    "saved to Prediction History. Please check the "
+                    "database connection before trying again."
+                )
 
         except (ValueError, TypeError, KeyError) as error:
             st.session_state["diaml_prediction_result"] = None
