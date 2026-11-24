@@ -61,12 +61,6 @@ what_if = st.Page(
     icon=":material/tune:"
 )
 
-model_analytics = st.Page(
-    "pages/model_analytics.py",
-    title="Model Analytics",
-    icon=":material/analytics:"
-)
-
 batch_prediction = st.Page(
     "pages/batch_prediction.py",
     title="Batch Prediction",
@@ -79,14 +73,20 @@ history = st.Page(
     icon=":material/history:"
 )
 
+model_analytics = st.Page(
+    "pages/model_analytics.py",
+    title="Model Analytics",
+    icon=":material/analytics:"
+)
+
 pg = st.navigation(
     [
         dashboard,
         prediction,
         what_if,
-        model_analytics,
         batch_prediction,
-        history
+        history,
+        model_analytics
     ],
     position="hidden"
 )
@@ -118,12 +118,6 @@ with st.sidebar:
     )
 
     st.page_link(
-        model_analytics,
-        label="Model Analytics",
-        icon=":material/analytics:"
-    )
-
-    st.page_link(
         batch_prediction,
         label="Batch Prediction",
         icon=":material/upload_file:"
@@ -133,6 +127,12 @@ with st.sidebar:
         history,
         label="Prediction History",
         icon=":material/history:"
+    )
+
+    st.page_link(
+        model_analytics,
+        label="Model Analytics",
+        icon=":material/analytics:"
     )
 
     st.markdown(

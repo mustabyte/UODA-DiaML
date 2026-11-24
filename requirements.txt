@@ -33,6 +33,7 @@ matplotlib-inline @ file:///home/conda/feedstock_root/build_artifacts/matplotlib
 narwhals==2.29.0
 nest-asyncio2 @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_nest-asyncio2_h5ded981_1793096318/work
 numpy==2.4.6
+openpyxl>=3.1.5
 packaging==26.3
 pandas==3.1.1
 parso @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_parso_1777722955/work
