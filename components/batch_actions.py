@@ -1,4 +1,3 @@
-
 from uuid import uuid4
 
 import streamlit as st
@@ -7,6 +6,11 @@ from components.batch_exports import (
     generate_batch_csv,
     generate_batch_excel,
     generate_export_filename,
+)
+
+from components.report_generator import (
+    generate_batch_report,
+    generate_report_filename,
 )
 
 from components.validation import FEATURE_COLUMNS, FEATURE_RULES
@@ -36,7 +40,9 @@ def prepare_batch_records(result):
         })
 
     if not records:
-        raise ValueError("No prediction records are available to save.")
+        raise ValueError(
+            "No prediction records are available to save."
+        )
 
     return records
 
@@ -298,16 +304,44 @@ def render_batch_exports(result, validation):
             st.markdown("**PDF**")
 
             st.caption(
-                "Professional prediction report."
+                "Professional analytical report."
             )
 
-            st.button(
-                "Download PDF",
-                icon=":material/download:",
-                width="stretch",
-                disabled=True,
-                key="diaml_batch_pdf_placeholder",
-            )
+            try:
+                with st.spinner("Preparing PDF report..."):
+                    pdf_data = generate_batch_report(
+                        result=result,
+                        validation=validation,
+                        batch_id=batch_id,
+                        filename=filename,
+                    )
+
+                if (
+                    not isinstance(pdf_data, bytes)
+                    or not pdf_data.startswith(b"%PDF-")
+                ):
+                    raise ValueError(
+                        "Invalid PDF report generated."
+                    )
+
+                st.download_button(
+                    "Download PDF",
+                    data=pdf_data,
+                    file_name=generate_report_filename(
+                        "Batch_Prediction"
+                    ),
+                    mime="application/pdf",
+                    icon=":material/download:",
+                    width="stretch",
+                    on_click="ignore",
+                    key="diaml_batch_pdf_download",
+                )
+
+            except Exception:
+                st.error(
+                    "Unable to generate the PDF report. "
+                    "Please try again."
+                )
 
         st.divider()
 
@@ -318,7 +352,9 @@ def render_batch_exports(result, validation):
         )
 
         st.caption(
-            "PDF reports will be available in Phase 8."
+            "PDF includes the processing summary, "
+            "visual analytics, prediction records "
+            "and detailed validation information."
         )
 
 

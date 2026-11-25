@@ -8,6 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from components.report_generator import generate_what_if_report, generate_report_filename
+
 from components.validation import (
     FEATURE_COLUMNS,
     FEATURE_RULES,
@@ -1648,6 +1650,32 @@ def render_measurement_comparison(
         )
 
 
+# Export the current validated simulation without saving it to history.
+def render_simulation_report(baseline, simulated, original_result, simulated_result, threshold, model_config, warnings):
+    st.subheader("Simulation Report")
+    with st.container(border=True):
+        st.caption("Download the current comparison, including all eight measurements and any validation warnings.")
+        try:
+            pdf = generate_what_if_report(
+                baseline, simulated, original_result, simulated_result,
+                threshold=threshold,
+                source=st.session_state.get("what_if_source") or "Manual Measurements",
+                model_name=model_config.get("model_name", "Random Forest"),
+                model_version=model_config.get("model_version", "v1.0"),
+                baseline_warnings=st.session_state.get("what_if_baseline_warnings", {}),
+                simulation_warnings=warnings,
+            )
+        except Exception:
+            st.error("Unable to generate the simulation report.")
+            return
+        st.download_button(
+            "Download Simulation Report (PDF)", data=pdf,
+            file_name=generate_report_filename("What_If_Simulation"),
+            mime="application/pdf", icon=":material/download:",
+            on_click="ignore", width="stretch", key="what_if_pdf_download",
+        )
+
+
 # Render model information and simulator limitations.
 def render_simulator_information(
     model_config,
@@ -1838,6 +1866,11 @@ st.divider()
 render_measurement_comparison(
     baseline,
     simulation_validation.cleaned_data,
+)
+
+render_simulation_report(
+    baseline, simulation_validation.cleaned_data, original_result,
+    simulated_result, threshold, model_config, simulation_validation.warnings,
 )
 
 render_simulator_information(

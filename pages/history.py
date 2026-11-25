@@ -5,7 +5,14 @@ from math import ceil
 import pandas as pd
 import streamlit as st
 
+from components.report_generator import (
+    generate_individual_report,
+    generate_saved_batch_report,
+    generate_report_filename,
+)
+
 from database.repository import (
+    FEATURE_COLUMNS,
     get_all_predictions,
     get_prediction_by_id,
     get_prediction_count,
@@ -392,6 +399,29 @@ def render_record_filters(prefix, source=None):
     }
 
 
+# Prepare a report only when requested, using session-local storage.
+def render_saved_report(key, label, signature, generator):
+    cache_key = "history_prepared_pdf"
+    cached = st.session_state.get(cache_key)
+    if st.button("Prepare PDF Report", key=f"{key}_prepare",
+                 icon=":material/picture_as_pdf:", width="stretch"):
+        st.session_state.pop(cache_key, None)
+        cached = None
+        try:
+            with st.spinner("Preparing saved report..."):
+                data = generator()
+            if not isinstance(data, bytes) or not data.startswith(b"%PDF-"):
+                raise ValueError("Invalid PDF report.")
+            cached = (signature, data, generate_report_filename(label))
+            st.session_state[cache_key] = cached
+        except Exception:
+            st.error("Unable to prepare the saved report. Please try again.")
+    if cached is not None and cached[0] == signature:
+        st.download_button("Download PDF", data=cached[1], file_name=cached[2],
+                           mime="application/pdf", icon=":material/download:",
+                           width="stretch", on_click="ignore", key=f"{key}_download")
+
+
 # Render the details of a selected prediction.
 def render_prediction_details(record):
     with st.container(border=True):
@@ -487,6 +517,27 @@ def render_prediction_details(record):
             st.caption("Model Version")
             st.markdown(
                 f'**{record["model_version"]}**'
+            )
+
+        if record["source"] == "individual":
+            st.divider()
+            st.markdown("**Saved Prediction Report**")
+            st.caption("Original validation warnings are not stored in history.")
+            render_saved_report(
+                f"history_individual_pdf_{record['id']}",
+                f"Saved_Prediction_{record['id']}",
+                ("individual", tuple(sorted((k, str(v)) for k, v in record.items()))),
+                lambda: generate_individual_report(
+                    measurements={feature: float(record[column]) for feature, column in FEATURE_COLUMNS.items()},
+                    probability=float(record["probability"]),
+                    classification=record["classification"],
+                    threshold=float(record["threshold"]),
+                    prediction_id=record["id"],
+                    prediction_date=record["created_at"],
+                    model_name=record["model_name"],
+                    model_version=record["model_version"],
+                    saved_history=True,
+                ),
             )
 
         st.caption(
@@ -913,6 +964,16 @@ def render_batch_records(batch):
     if not records:
         st.info("This batch contains no saved predictions.")
         return
+
+    with st.container(border=True):
+        st.markdown("**Saved Batch Report**")
+        st.caption("Includes every saved record in this batch, regardless of the table filter. Original validation details are unavailable.")
+        render_saved_report(
+            f"history_batch_pdf_{batch_id}",
+            f"Saved_Batch_{batch_id[:8]}",
+            ("batch", batch_id, tuple(tuple(sorted((k, str(v)) for k, v in record.items())) for record in records)),
+            lambda: generate_saved_batch_report(records, batch_id),
+        )
 
     st.markdown("### Batch Predictions")
 

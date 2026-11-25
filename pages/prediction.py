@@ -1,4 +1,5 @@
 
+from datetime import datetime, timezone
 from pathlib import Path
 from math import isfinite
 
@@ -8,6 +9,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from database.repository import save_prediction
+
+from components.report_generator import (
+    generate_individual_report,
+    generate_report_filename,
+)
+
 from components.validation import (
     FEATURE_COLUMNS,
     FEATURE_RULES,
@@ -100,6 +107,45 @@ def get_decision_threshold(config):
                 return threshold
 
     return 0.40
+
+
+# Initialize prediction and report session state.
+def initialize_prediction_state():
+    defaults = {
+        "diaml_prediction_result": None,
+        "diaml_prediction_inputs": None,
+        "diaml_prediction_warnings": {},
+        "diaml_prediction_id": None,
+        "diaml_prediction_save_error": None,
+        "diaml_prediction_timestamp": None,
+        "diaml_prediction_model_name": None,
+        "diaml_prediction_model_version": None,
+        "diaml_prediction_pdf": None,
+        "diaml_prediction_pdf_filename": None,
+        "diaml_prediction_pdf_error": None,
+    }
+
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+# Clear the previous prediction and its associated report.
+def clear_prediction_state():
+    st.session_state["diaml_prediction_result"] = None
+    st.session_state["diaml_prediction_inputs"] = None
+    st.session_state["diaml_prediction_warnings"] = {}
+
+    st.session_state["diaml_prediction_id"] = None
+    st.session_state["diaml_prediction_save_error"] = None
+
+    st.session_state["diaml_prediction_timestamp"] = None
+    st.session_state["diaml_prediction_model_name"] = None
+    st.session_state["diaml_prediction_model_version"] = None
+
+    st.session_state["diaml_prediction_pdf"] = None
+    st.session_state["diaml_prediction_pdf_filename"] = None
+    st.session_state["diaml_prediction_pdf_error"] = None
 
 
 # Create the probability gauge.
@@ -247,6 +293,166 @@ def run_prediction(pipeline, input_dataframe, threshold):
     }
 
 
+# Prepare a PDF report from the latest successful prediction.
+def prepare_prediction_report():
+    result = st.session_state["diaml_prediction_result"]
+    measurements = st.session_state["diaml_prediction_inputs"]
+
+    if result is None or measurements is None:
+        return False
+
+    # Reuse the existing PDF instead of generating it again.
+    if st.session_state["diaml_prediction_pdf"] is not None:
+        return True
+
+    st.session_state["diaml_prediction_pdf_error"] = None
+
+    prediction_id = st.session_state["diaml_prediction_id"]
+
+    classification = (
+        "Positive"
+        if result["prediction"] == 1
+        else "Negative"
+    )
+
+    model_name = (
+        st.session_state["diaml_prediction_model_name"]
+        or "Random Forest"
+    )
+
+    model_version = (
+        st.session_state["diaml_prediction_model_version"]
+        or "v1.0"
+    )
+
+    try:
+        # Generate the report using the original submitted measurements.
+        pdf_bytes = generate_individual_report(
+            measurements=measurements,
+            probability=result["probability"],
+            classification=classification,
+            threshold=result["threshold"],
+            prediction_id=prediction_id,
+            prediction_date=st.session_state[
+                "diaml_prediction_timestamp"
+            ],
+            model_name=model_name,
+            model_version=model_version,
+            warnings=st.session_state[
+                "diaml_prediction_warnings"
+            ],
+            source="individual",
+        )
+
+        if not isinstance(pdf_bytes, bytes):
+            raise ValueError(
+                "The report generator returned invalid PDF data."
+            )
+
+        if not pdf_bytes.startswith(b"%PDF-"):
+            raise ValueError(
+                "The generated report is not a valid PDF."
+            )
+
+        # Include the saved prediction ID in the filename when available.
+        report_name = (
+            f"Prediction_{prediction_id}"
+            if prediction_id is not None
+            else "Prediction_Unsaved"
+        )
+
+        filename = generate_report_filename(report_name)
+
+        # Store the generated PDF only in the current session.
+        st.session_state["diaml_prediction_pdf"] = pdf_bytes
+        st.session_state["diaml_prediction_pdf_filename"] = filename
+
+        return True
+
+    except Exception:
+        st.session_state["diaml_prediction_pdf"] = None
+        st.session_state["diaml_prediction_pdf_filename"] = None
+
+        st.session_state["diaml_prediction_pdf_error"] = (
+            "The prediction report could not be generated. "
+            "Please try preparing the report again."
+        )
+
+        return False
+
+
+# Display the personalized PDF report download action.
+def render_prediction_report():
+    st.divider()
+
+    st.markdown("**Prediction Report**")
+
+    st.caption(
+        "Download a personalized PDF containing the prediction "
+        "results, submitted measurements, model information "
+        "and any applicable validation warnings."
+    )
+
+    # Prepare the report automatically when it is first displayed.
+    if (
+        st.session_state["diaml_prediction_pdf"] is None
+        and st.session_state["diaml_prediction_pdf_error"] is None
+    ):
+        with st.spinner("Preparing prediction report..."):
+            prepare_prediction_report()
+
+    report_error = st.session_state[
+        "diaml_prediction_pdf_error"
+    ]
+
+    # Allow report generation to be retried without repeating prediction.
+    if report_error:
+        st.warning(report_error)
+
+        if st.button(
+            "Retry Report Generation",
+            icon=":material/refresh:",
+            width="stretch",
+            key="prediction_report_retry",
+        ):
+            with st.spinner("Preparing prediction report..."):
+                prepare_prediction_report()
+
+            st.rerun()
+
+        return
+
+    pdf_bytes = st.session_state["diaml_prediction_pdf"]
+
+    filename = st.session_state[
+        "diaml_prediction_pdf_filename"
+    ]
+
+    if pdf_bytes is None or filename is None:
+        return
+
+    # Download the prepared PDF without triggering another app rerun.
+    st.download_button(
+        label="Download PDF Report",
+        data=pdf_bytes,
+        file_name=filename,
+        mime="application/pdf",
+        icon=":material/download:",
+        type="secondary",
+        width="stretch",
+        on_click="ignore",
+        key="prediction_pdf_download",
+    )
+
+    # Display the report format and file size.
+    file_size = len(pdf_bytes) / 1024
+
+    st.caption(
+        f"PDF document · {file_size:.1f} KB · "
+        "Includes the original prediction and measurements."
+    )
+
+
 # Display the prediction classification and probability.
 def display_prediction_result(result):
     prediction = result["prediction"]
@@ -311,16 +517,26 @@ def display_prediction_result(result):
             "individual's diabetes risk."
         )
 
-        # Display the save confirmation inside the result box.
-        saved_prediction_id = st.session_state["diaml_prediction_id"]
-        save_error = st.session_state["diaml_prediction_save_error"]
+        # Display the database save confirmation inside the result box.
+        saved_prediction_id = st.session_state[
+            "diaml_prediction_id"
+        ]
+
+        save_error = st.session_state[
+            "diaml_prediction_save_error"
+        ]
 
         if saved_prediction_id is not None:
             st.success(
-                f"Prediction saved to history — ID #{saved_prediction_id}"
+                f"Prediction saved to history — "
+                f"ID #{saved_prediction_id}"
             )
+
         elif save_error:
             st.warning(save_error)
+
+        # Keep the PDF download action inside the result container.
+        render_prediction_report()
 
     # Keep the detailed explanation hidden until requested.
     with st.expander("Understanding Your Result", expanded=False):
@@ -375,22 +591,8 @@ except (
     st.stop()
 
 
-# Initialize prediction state.
-if "diaml_prediction_result" not in st.session_state:
-    st.session_state["diaml_prediction_result"] = None
-
-if "diaml_prediction_inputs" not in st.session_state:
-    st.session_state["diaml_prediction_inputs"] = None
-
-if "diaml_prediction_warnings" not in st.session_state:
-    st.session_state["diaml_prediction_warnings"] = {}
-
-# Track the saved database record for the latest prediction.
-if "diaml_prediction_id" not in st.session_state:
-    st.session_state["diaml_prediction_id"] = None
-
-if "diaml_prediction_save_error" not in st.session_state:
-    st.session_state["diaml_prediction_save_error"] = None
+# Initialize the prediction and report state.
+initialize_prediction_state()
 
 
 # Build the health measurement form.
@@ -425,25 +627,19 @@ with st.container(border=True):
 
 # Validate submitted measurements and generate a prediction.
 if submitted:
-    # A new submission replaces the previous record status.
-    st.session_state["diaml_prediction_id"] = None
-    st.session_state["diaml_prediction_save_error"] = None
+    # Prevent previous results or reports from appearing for a new submission.
+    clear_prediction_state()
+
     validation_result = validate_prediction_input(input_data)
 
     if not validation_result.is_valid:
-        st.session_state["diaml_prediction_result"] = None
-        st.session_state["diaml_prediction_inputs"] = None
-        st.session_state["diaml_prediction_warnings"] = {}
-
         display_validation_feedback(validation_result)
 
     else:
-        st.session_state["diaml_prediction_warnings"] = (
-            validation_result.warnings.copy()
-        )
-
         try:
-            input_dataframe = prepare_prediction_dataframe(input_data)
+            input_dataframe = prepare_prediction_dataframe(
+                input_data
+            )
 
             prediction_result = run_prediction(
                 pipeline,
@@ -451,12 +647,42 @@ if submitted:
                 decision_threshold,
             )
 
+            # Capture the prediction timestamp and model information.
+            prediction_timestamp = datetime.now(timezone.utc)
+
+            model_name = model_config.get(
+                "model_name",
+                "Random Forest",
+            )
+
+            model_version = model_config.get(
+                "model_version",
+                "v1.0",
+            )
+
+            # Store the original prediction and validated measurements.
             st.session_state["diaml_prediction_result"] = (
                 prediction_result
             )
 
             st.session_state["diaml_prediction_inputs"] = (
-                validation_result.cleaned_data
+                validation_result.cleaned_data.copy()
+            )
+
+            st.session_state["diaml_prediction_warnings"] = (
+                validation_result.warnings.copy()
+            )
+
+            st.session_state["diaml_prediction_timestamp"] = (
+                prediction_timestamp
+            )
+
+            st.session_state["diaml_prediction_model_name"] = (
+                model_name
+            )
+
+            st.session_state["diaml_prediction_model_version"] = (
+                model_version
             )
 
             # Save only after a new, successful prediction submission.
@@ -470,12 +696,16 @@ if submitted:
                         else "Negative"
                     ),
                     threshold=prediction_result["threshold"],
-                    model_name=model_config.get("model_name", "Random Forest"),
-                    model_version=model_config.get("model_version", "v1.0"),
+                    model_name=model_name,
+                    model_version=model_version,
                 )
-                st.session_state["diaml_prediction_id"] = prediction_id
+
+                st.session_state["diaml_prediction_id"] = (
+                    prediction_id
+                )
+
             except Exception:
-                # Keep the model result visible if database saving fails.
+                # Keep prediction and PDF reporting available if saving fails.
                 st.session_state["diaml_prediction_save_error"] = (
                     "The prediction was generated, but it could not be "
                     "saved to Prediction History. Please check the "
@@ -483,9 +713,7 @@ if submitted:
                 )
 
         except (ValueError, TypeError, KeyError) as error:
-            st.session_state["diaml_prediction_result"] = None
-            st.session_state["diaml_prediction_inputs"] = None
-            st.session_state["diaml_prediction_warnings"] = {}
+            clear_prediction_state()
 
             st.error(
                 f"Prediction could not be completed: {error}"
@@ -496,7 +724,9 @@ if submitted:
 saved_result = st.session_state["diaml_prediction_result"]
 
 if saved_result is not None:
-    saved_warnings = st.session_state["diaml_prediction_warnings"]
+    saved_warnings = st.session_state[
+        "diaml_prediction_warnings"
+    ]
 
     if saved_warnings:
         st.warning(
@@ -511,7 +741,9 @@ if saved_result is not None:
 
     # Keep submitted measurements in a separate collapsible panel.
     with st.expander("View Submitted Measurements", expanded=False):
-        saved_inputs = st.session_state["diaml_prediction_inputs"]
+        saved_inputs = st.session_state[
+            "diaml_prediction_inputs"
+        ]
 
         if saved_inputs is not None:
             input_table = pd.DataFrame(
