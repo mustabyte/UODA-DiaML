@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 import numpy as np
@@ -31,18 +30,65 @@ INVALID_ZERO_COLUMNS = [
 ]
 
 
-# Load the original dataset with its column names
-def load_dataset(path=None):
-    if path is None:
-        path = Path(__file__).resolve().parents[1] / "data" / "diabetes.csv"
+# Validate the dataset structure and values
+def validate_dataset(df):
+    expected_columns = FEATURE_COLUMNS + [TARGET_COLUMN]
 
-    df = pd.read_csv(
-        path,
-        header=None,
-        names=FEATURE_COLUMNS + [TARGET_COLUMN]
-    )
+    if df.empty:
+        raise ValueError("The dataset is empty.")
+
+    if df.columns.tolist() != expected_columns:
+        raise ValueError("Invalid dataset column structure.")
+
+    if not all(pd.api.types.is_numeric_dtype(df[column])
+               for column in expected_columns):
+        raise ValueError("Dataset must contain numeric values.")
+
+    if np.isinf(df.to_numpy(dtype=float)).any():
+        raise ValueError("Dataset contains infinite values.")
+
+    if df[TARGET_COLUMN].isna().any():
+        raise ValueError("Target column contains missing values.")
+
+    if not df[TARGET_COLUMN].isin([0, 1]).all():
+        raise ValueError("Outcome must contain only 0 or 1.")
+
+    if (df[FEATURE_COLUMNS] < 0).any().any():
+        raise ValueError("Dataset contains negative measurements.")
 
     return df
+
+
+# Load and validate the original dataset
+def load_dataset(path=None):
+    if path is None:
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "diabetes.csv"
+        )
+
+    path = Path(path)
+
+    if not path.is_file():
+        raise FileNotFoundError(f"Dataset not found: {path}")
+
+    try:
+        df = pd.read_csv(path, header=None)
+    except pd.errors.EmptyDataError as error:
+        raise ValueError("The dataset is empty.") from error
+
+    expected_columns = FEATURE_COLUMNS + [TARGET_COLUMN]
+
+    if df.shape[1] != len(expected_columns):
+        raise ValueError(
+            f"Expected {len(expected_columns)} columns, "
+            f"but found {df.shape[1]}."
+        )
+
+    df.columns = expected_columns
+
+    return validate_dataset(df)
 
 
 # Replace invalid zero measurements with missing values
@@ -52,7 +98,11 @@ class InvalidZeroTransformer(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         X = pd.DataFrame(X, columns=FEATURE_COLUMNS).copy()
-        X[INVALID_ZERO_COLUMNS] = X[INVALID_ZERO_COLUMNS].replace(0, np.nan)
+
+        X[INVALID_ZERO_COLUMNS] = (
+            X[INVALID_ZERO_COLUMNS].replace(0, np.nan)
+        )
+
         return X
 
 
